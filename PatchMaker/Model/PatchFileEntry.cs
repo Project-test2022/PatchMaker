@@ -7,5 +7,6 @@
         public string NewSha256 { get; set; }
         public string Delta { get; set; }
         public bool IsAdded { get; set; }
+        public bool IsRemoved { get; set; }
     }
 }

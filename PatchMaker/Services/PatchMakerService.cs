@@ -37,7 +37,7 @@ namespace PatchMaker.Services
             var addedFiles = new List<string>();
             var removedFiles = new List<string>();
 
-            // 差分生成
+            // --- 差分ファイル作成 ---
             foreach (var pair in newMap)
             {
                 var relativePath = pair.Key;
@@ -45,7 +45,7 @@ namespace PatchMaker.Services
 
                 if (!oldMap.TryGetValue(relativePath, out var oldPath))
                 {
-                    // 旧版に存在しない → 追加ファイル
+                    // 新規追加ファイル
                     addedFiles.Add(relativePath);
                     continue;
                 }
@@ -91,11 +91,12 @@ namespace PatchMaker.Services
                     BaseSha256 = baseHash,
                     NewSha256 = newHash,
                     Delta = deltaFileName,
-                    IsAdded = false
+                    IsAdded = false,
+                    IsRemoved = false
                 });
             }
 
-            // 追加ファイル登録（旧バージョンに存在しなかったもの）
+            // --- 追加ファイル登録 ---
             foreach (var addedPath in addedFiles)
             {
                 var newFullPath = newMap[addedPath];
@@ -103,43 +104,57 @@ namespace PatchMaker.Services
                 var fullFileName = $"{safeFileName}.v{config.BaseVersion}_to_v{config.Version}.full";
                 var fullTempPath = Path.Combine(config.OutDir, fullFileName);
 
-                // ZIPに入れるため一時コピー
                 File.Copy(newFullPath, fullTempPath, true);
-
                 var newHash = Hash.Sha256(newFullPath);
+
                 fileEntries.Add(new PatchFileEntry
                 {
                     Path = addedPath,
                     BaseSha256 = null,
                     NewSha256 = newHash,
                     Delta = fullFileName,
-                    IsAdded = true
+                    IsAdded = true,
+                    IsRemoved = false
                 });
             }
 
-            // 削除ファイル一覧
-            foreach (var path in oldMap.Keys)
+            // --- 削除ファイル登録 ---
+            foreach (var oldPath in oldMap.Keys)
             {
-                if (!newMap.ContainsKey(path))
+                if (!newMap.ContainsKey(oldPath))
                 {
-                    removedFiles.Add(path);
+                    removedFiles.Add(oldPath);
+
+                    var oldFullPath = oldMap[oldPath];
+                    var oldHash = Hash.Sha256(oldFullPath);
+
+                    fileEntries.Add(new PatchFileEntry
+                    {
+                        Path = oldPath,
+                        BaseSha256 = oldHash,
+                        NewSha256 = null,
+                        Delta = null,
+                        IsAdded = false,
+                        IsRemoved = true
+                    });
                 }
             }
 
-            // ZIP作成
+            // --- ZIP作成 ---
             var zipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
             var zipPath = Path.Combine(config.OutDir, zipName);
             if (File.Exists(zipPath)) File.Delete(zipPath);
 
             using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
             {
-                foreach (var entry in fileEntries)
+                foreach (var entry in fileEntries.Where(x => !x.IsRemoved))
                 {
-                    var srcPath = Path.Combine(config.OutDir, entry.Delta);
+                    // 削除ファイルはZIPに含めない
+                    var srcPath = Path.Combine(config.OutDir, entry.Delta ?? "");
                     if (File.Exists(srcPath))
                     {
                         zip.CreateEntryFromFile(srcPath, entry.Delta, CompressionLevel.Fastest);
-                        File.Delete(srcPath); // ZIP化後削除してクリーンに
+                        File.Delete(srcPath); // ZIP化後削除
                     }
                 }
             }
@@ -147,7 +162,7 @@ namespace PatchMaker.Services
             var zipSize = new FileInfo(zipPath).Length;
             var zipSha256 = Hash.Sha256(zipPath);
 
-            // マニフェスト生成（新形式）
+            // --- マニフェスト生成 ---
             var manifest = new ManifestZip
             {
                 Version = config.Version,
@@ -170,12 +185,14 @@ namespace PatchMaker.Services
             var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(manifestPath, manifestJson);
 
+            // --- ログファイル出力 ---
             if (addedFiles.Count > 0)
                 File.WriteAllLines(Path.Combine(config.OutDir, "ADDED_FILES.txt"), addedFiles.OrderBy(x => x));
 
             if (removedFiles.Count > 0)
                 File.WriteAllLines(Path.Combine(config.OutDir, "REMOVED_FILES.txt"), removedFiles.OrderBy(x => x));
 
+            // --- コンソール出力 ---
             Console.WriteLine("=== 差分作成完了 ===");
             Console.WriteLine($"変更ファイル数: {fileEntries.Count}");
             if (addedFiles.Count > 0)
@@ -188,7 +205,7 @@ namespace PatchMaker.Services
             return true;
         }
 
-        // --- ユーティリティ類 ---
+        // --- ユーティリティ ---
         private static IEnumerable<string> FilesUnder(string root, List<string> excludes)
         {
             var all = Directory.GetFiles(root, "*", SearchOption.AllDirectories);
@@ -197,9 +214,7 @@ namespace PatchMaker.Services
             foreach (var path in all)
             {
                 if (!IsExcluded(GetRelativePath(root, path), excludes))
-                {
                     list.Add(path);
-                }
             }
             return list;
         }
@@ -216,9 +231,7 @@ namespace PatchMaker.Services
         private static string AppendDirectorySeparatorChar(string path)
         {
             if (!path.EndsWith(Path.DirectorySeparatorChar.ToString()))
-            {
                 return path + Path.DirectorySeparatorChar;
-            }
             return path;
         }
 
@@ -228,12 +241,9 @@ namespace PatchMaker.Services
             foreach (var pattern in excludes)
             {
                 if (string.IsNullOrWhiteSpace(pattern)) continue;
-
                 var keyword = pattern.Replace("**/", "/").Replace("**", "");
                 if (unixPath.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
                     return true;
-                }
             }
             return false;
         }
