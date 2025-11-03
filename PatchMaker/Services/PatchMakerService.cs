@@ -34,18 +34,19 @@ namespace PatchMaker.Services
                 .ToDictionary(path => GetRelativePath(config.NewDir, path).Replace('\\', '/'));
 
             var fileEntries = new List<PatchFileEntry>();
-            var added = new List<string>();
-            var removed = new List<string>();
+            var addedFiles = new List<string>();
+            var removedFiles = new List<string>();
 
+            // 差分生成
             foreach (var pair in newMap)
             {
                 var relativePath = pair.Key;
                 var newPath = pair.Value;
 
-                string oldPath;
-                if (!oldMap.TryGetValue(relativePath, out oldPath))
+                if (!oldMap.TryGetValue(relativePath, out var oldPath))
                 {
-                    added.Add(relativePath);
+                    // 旧版に存在しない → 追加ファイル
+                    addedFiles.Add(relativePath);
                     continue;
                 }
 
@@ -53,7 +54,7 @@ namespace PatchMaker.Services
                 var newHash = Hash.Sha256(newPath);
                 if (baseHash == newHash)
                 {
-                    continue;
+                    continue; // 同一ファイルはスキップ
                 }
 
                 var safeFileName = relativePath.Replace("/", "__");
@@ -89,7 +90,30 @@ namespace PatchMaker.Services
                     Path = relativePath,
                     BaseSha256 = baseHash,
                     NewSha256 = newHash,
-                    Delta = deltaFileName
+                    Delta = deltaFileName,
+                    IsAdded = false
+                });
+            }
+
+            // 追加ファイル登録（旧バージョンに存在しなかったもの）
+            foreach (var addedPath in addedFiles)
+            {
+                var newFullPath = newMap[addedPath];
+                var safeFileName = addedPath.Replace("/", "__");
+                var fullFileName = $"{safeFileName}.v{config.BaseVersion}_to_v{config.Version}.full";
+                var fullTempPath = Path.Combine(config.OutDir, fullFileName);
+
+                // ZIPに入れるため一時コピー
+                File.Copy(newFullPath, fullTempPath, true);
+
+                var newHash = Hash.Sha256(newFullPath);
+                fileEntries.Add(new PatchFileEntry
+                {
+                    Path = addedPath,
+                    BaseSha256 = null,
+                    NewSha256 = newHash,
+                    Delta = fullFileName,
+                    IsAdded = true
                 });
             }
 
@@ -98,7 +122,7 @@ namespace PatchMaker.Services
             {
                 if (!newMap.ContainsKey(path))
                 {
-                    removed.Add(path);
+                    removedFiles.Add(path);
                 }
             }
 
@@ -111,11 +135,11 @@ namespace PatchMaker.Services
             {
                 foreach (var entry in fileEntries)
                 {
-                    var deltaPath = Path.Combine(config.OutDir, entry.Delta);
-                    if (File.Exists(deltaPath))
+                    var srcPath = Path.Combine(config.OutDir, entry.Delta);
+                    if (File.Exists(srcPath))
                     {
-                        zip.CreateEntryFromFile(deltaPath, entry.Delta, CompressionLevel.Fastest);
-                        File.Delete(deltaPath); // ZIP化後削除してクリーンに
+                        zip.CreateEntryFromFile(srcPath, entry.Delta, CompressionLevel.Fastest);
+                        File.Delete(srcPath); // ZIP化後削除してクリーンに
                     }
                 }
             }
@@ -146,18 +170,18 @@ namespace PatchMaker.Services
             var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(manifestPath, manifestJson);
 
-            if (added.Count > 0)
-                File.WriteAllLines(Path.Combine(config.OutDir, "ADDED_FILES.txt"), added.OrderBy(x => x));
+            if (addedFiles.Count > 0)
+                File.WriteAllLines(Path.Combine(config.OutDir, "ADDED_FILES.txt"), addedFiles.OrderBy(x => x));
 
-            if (removed.Count > 0)
-                File.WriteAllLines(Path.Combine(config.OutDir, "REMOVED_FILES.txt"), removed.OrderBy(x => x));
+            if (removedFiles.Count > 0)
+                File.WriteAllLines(Path.Combine(config.OutDir, "REMOVED_FILES.txt"), removedFiles.OrderBy(x => x));
 
             Console.WriteLine("=== 差分作成完了 ===");
             Console.WriteLine($"変更ファイル数: {fileEntries.Count}");
-            if (added.Count > 0)
-                Console.WriteLine($"追加ファイル数: {added.Count} （ADDED_FILES.txt 参照）");
-            if (removed.Count > 0)
-                Console.WriteLine($"削除ファイル数: {removed.Count} （REMOVED_FILES.txt 参照）");
+            if (addedFiles.Count > 0)
+                Console.WriteLine($"追加ファイル数: {addedFiles.Count} （ADDED_FILES.txt 参照）");
+            if (removedFiles.Count > 0)
+                Console.WriteLine($"削除ファイル数: {removedFiles.Count} （REMOVED_FILES.txt 参照）");
             Console.WriteLine("出力先: " + Path.GetFullPath(config.OutDir));
             Console.WriteLine("マニフェスト: " + Path.GetFullPath(manifestPath));
 
@@ -218,31 +242,5 @@ namespace PatchMaker.Services
         {
             Console.Error.WriteLine("Error: " + message);
         }
-    }
-
-    // --- 新マニフェスト用モデル定義 ---
-    public sealed class ManifestZip
-    {
-        public string Version { get; set; }
-        public string BaseFrom { get; set; }
-        public List<PatchArchiveEntry> PatchArchives { get; set; }
-        public bool Mandatory { get; set; }
-    }
-
-    public sealed class PatchArchiveEntry
-    {
-        public string ArchiveName { get; set; }
-        public string Url { get; set; }
-        public long Size { get; set; }
-        public string Sha256 { get; set; }
-        public List<PatchFileEntry> Files { get; set; }
-    }
-
-    public sealed class PatchFileEntry
-    {
-        public string Path { get; set; }
-        public string BaseSha256 { get; set; }
-        public string NewSha256 { get; set; }
-        public string Delta { get; set; }
     }
 }
