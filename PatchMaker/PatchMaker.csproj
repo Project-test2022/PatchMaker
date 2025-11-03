@@ -82,11 +82,16 @@
     <Compile Include="Config\ConfigLoader.cs" />
     <Compile Include="Config\MakerConfig.cs" />
     <Compile Include="Model\Manifest.cs" />
+    <Compile Include="Model\ManifestZip.cs" />
+    <Compile Include="Model\PatchArchiveEntry.cs" />
     <Compile Include="Model\PatchEntry.cs" />
+    <Compile Include="Model\PatchFileEntry.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\PatchMakerService.cs" />
     <Compile Include="Utility\Hash.cs" />
+    <Compile Include="Utility\Log.cs" />
+    <Compile Include="Utility\Utility.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

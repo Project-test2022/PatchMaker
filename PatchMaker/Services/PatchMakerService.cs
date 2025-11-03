@@ -18,20 +18,23 @@ namespace PatchMaker.Services
         {
             if (!Directory.Exists(config.OldDir))
             {
-                Error("旧バージョンのディレクトリが存在しません: " + config.OldDir);
+                Log.Error("旧バージョンのディレクトリが存在しません: " + config.OldDir);
                 return false;
             }
+
             if (!Directory.Exists(config.NewDir))
             {
-                Error("新バージョンのディレクトリが存在しません: " + config.NewDir);
+                Log.Error("新バージョンのディレクトリが存在しません: " + config.NewDir);
                 return false;
             }
+
             Directory.CreateDirectory(config.OutDir);
 
-            var oldMap = FilesUnder(config.OldDir, config.ExcludeGlobs)
-                .ToDictionary(path => GetRelativePath(config.OldDir, path).Replace('\\', '/'));
-            var newMap = FilesUnder(config.NewDir, config.ExcludeGlobs)
-                .ToDictionary(path => GetRelativePath(config.NewDir, path).Replace('\\', '/'));
+            var oldMap = Utility.Utility.FilesUnder(config.OldDir, config.ExcludeGlobs)
+                .ToDictionary(path => Utility.Utility.GetRelativePath(config.OldDir, path).Replace('\\', '/'));
+
+            var newMap = Utility.Utility.FilesUnder(config.NewDir, config.ExcludeGlobs)
+                .ToDictionary(path => Utility.Utility.GetRelativePath(config.NewDir, path).Replace('\\', '/'));
 
             var fileEntries = new List<PatchFileEntry>();
             var addedFiles = new List<string>();
@@ -52,6 +55,7 @@ namespace PatchMaker.Services
 
                 var baseHash = Hash.Sha256(oldPath);
                 var newHash = Hash.Sha256(newPath);
+
                 if (baseHash == newHash)
                 {
                     continue; // 同一ファイルはスキップ
@@ -124,7 +128,6 @@ namespace PatchMaker.Services
                 if (!newMap.ContainsKey(oldPath))
                 {
                     removedFiles.Add(oldPath);
-
                     var oldFullPath = oldMap[oldPath];
                     var oldHash = Hash.Sha256(oldFullPath);
 
@@ -143,18 +146,21 @@ namespace PatchMaker.Services
             // --- ZIP作成 ---
             var zipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
             var zipPath = Path.Combine(config.OutDir, zipName);
-            if (File.Exists(zipPath)) File.Delete(zipPath);
+
+            if (File.Exists(zipPath))
+            {
+                File.Delete(zipPath);
+            }
 
             using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
             {
                 foreach (var entry in fileEntries.Where(x => !x.IsRemoved))
                 {
-                    // 削除ファイルはZIPに含めない
-                    var srcPath = Path.Combine(config.OutDir, entry.Delta ?? "");
+                    var srcPath = Path.Combine(config.OutDir, entry.Delta ?? string.Empty);
                     if (File.Exists(srcPath))
                     {
                         zip.CreateEntryFromFile(srcPath, entry.Delta, CompressionLevel.Fastest);
-                        File.Delete(srcPath); // ZIP化後削除
+                        File.Delete(srcPath);
                     }
                 }
             }
@@ -185,72 +191,24 @@ namespace PatchMaker.Services
             var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(manifestPath, manifestJson);
 
-            // --- ログファイル出力 ---
-            if (addedFiles.Count > 0)
-                File.WriteAllLines(Path.Combine(config.OutDir, "ADDED_FILES.txt"), addedFiles.OrderBy(x => x));
-
-            if (removedFiles.Count > 0)
-                File.WriteAllLines(Path.Combine(config.OutDir, "REMOVED_FILES.txt"), removedFiles.OrderBy(x => x));
-
             // --- コンソール出力 ---
             Console.WriteLine("=== 差分作成完了 ===");
             Console.WriteLine($"変更ファイル数: {fileEntries.Count}");
+
             if (addedFiles.Count > 0)
-                Console.WriteLine($"追加ファイル数: {addedFiles.Count} （ADDED_FILES.txt 参照）");
+            {
+                Console.WriteLine($"追加ファイル数: {addedFiles.Count}");
+            }
+
             if (removedFiles.Count > 0)
-                Console.WriteLine($"削除ファイル数: {removedFiles.Count} （REMOVED_FILES.txt 参照）");
+            {
+                Console.WriteLine($"削除ファイル数: {removedFiles.Count}");
+            }
+
             Console.WriteLine("出力先: " + Path.GetFullPath(config.OutDir));
             Console.WriteLine("マニフェスト: " + Path.GetFullPath(manifestPath));
 
             return true;
-        }
-
-        // --- ユーティリティ ---
-        private static IEnumerable<string> FilesUnder(string root, List<string> excludes)
-        {
-            var all = Directory.GetFiles(root, "*", SearchOption.AllDirectories);
-            var list = new List<string>(all.Length);
-
-            foreach (var path in all)
-            {
-                if (!IsExcluded(GetRelativePath(root, path), excludes))
-                    list.Add(path);
-            }
-            return list;
-        }
-
-        private static string GetRelativePath(string basePath, string fullPath)
-        {
-            var baseUri = new Uri(AppendDirectorySeparatorChar(basePath));
-            var fullUri = new Uri(fullPath);
-            var relativeUri = baseUri.MakeRelativeUri(fullUri);
-            var relativePath = Uri.UnescapeDataString(relativeUri.ToString());
-            return relativePath.Replace('/', Path.DirectorySeparatorChar);
-        }
-
-        private static string AppendDirectorySeparatorChar(string path)
-        {
-            if (!path.EndsWith(Path.DirectorySeparatorChar.ToString()))
-                return path + Path.DirectorySeparatorChar;
-            return path;
-        }
-
-        private static bool IsExcluded(string path, List<string> excludes)
-        {
-            var unixPath = path.Replace('\\', '/');
-            foreach (var pattern in excludes)
-            {
-                if (string.IsNullOrWhiteSpace(pattern)) continue;
-                var keyword = pattern.Replace("**/", "/").Replace("**", "");
-                if (unixPath.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
-            }
-            return false;
-        }
-
-        private static void Error(string message)
-        {
-            Console.Error.WriteLine("Error: " + message);
         }
     }
 }
