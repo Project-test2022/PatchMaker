@@ -16,6 +16,7 @@ namespace PatchMaker.Services
     {
         public bool Run(MakerConfig config)
         {
+            // --- 検証 ---
             if (!Directory.Exists(config.OldDir))
             {
                 Log.Error("旧バージョンのディレクトリが存在しません: " + config.OldDir);
@@ -30,17 +31,18 @@ namespace PatchMaker.Services
 
             Directory.CreateDirectory(config.OutDir);
 
+            // --- ファイルマッピング ---
             var oldMap = Utility.Utility.FilesUnder(config.OldDir, config.ExcludeGlobs)
                 .ToDictionary(path => Utility.Utility.GetRelativePath(config.OldDir, path).Replace('\\', '/'));
 
             var newMap = Utility.Utility.FilesUnder(config.NewDir, config.ExcludeGlobs)
                 .ToDictionary(path => Utility.Utility.GetRelativePath(config.NewDir, path).Replace('\\', '/'));
 
-            var fileEntries = new List<PatchFileEntry>();
+            var diffFiles = new List<PatchFileEntry>();
             var addedFiles = new List<string>();
             var removedFiles = new List<string>();
 
-            // --- 差分ファイル作成 ---
+            // --- 差分生成 ---
             foreach (var pair in newMap)
             {
                 var relativePath = pair.Key;
@@ -48,17 +50,14 @@ namespace PatchMaker.Services
 
                 if (!oldMap.TryGetValue(relativePath, out var oldPath))
                 {
-                    // 新規追加ファイル
-                    addedFiles.Add(relativePath);
-                    continue;
+                    continue; // 追加ファイル
                 }
 
                 var baseHash = Hash.Sha256(oldPath);
                 var newHash = Hash.Sha256(newPath);
-
                 if (baseHash == newHash)
                 {
-                    continue; // 同一ファイルはスキップ
+                    continue; // 同一
                 }
 
                 var safeFileName = relativePath.Replace("/", "__");
@@ -89,7 +88,7 @@ namespace PatchMaker.Services
 
                 File.Delete(signaturePath);
 
-                fileEntries.Add(new PatchFileEntry
+                diffFiles.Add(new PatchFileEntry
                 {
                     Path = relativePath,
                     BaseSha256 = baseHash,
@@ -100,61 +99,35 @@ namespace PatchMaker.Services
                 });
             }
 
-            // --- 追加ファイル登録 ---
-            foreach (var addedPath in addedFiles)
+            // --- 追加ファイル ---
+            foreach (var pair in newMap)
             {
-                var newFullPath = newMap[addedPath];
-                var safeFileName = addedPath.Replace("/", "__");
-                var fullFileName = $"{safeFileName}.v{config.BaseVersion}_to_v{config.Version}.full";
-                var fullTempPath = Path.Combine(config.OutDir, fullFileName);
-
-                File.Copy(newFullPath, fullTempPath, true);
-                var newHash = Hash.Sha256(newFullPath);
-
-                fileEntries.Add(new PatchFileEntry
+                if (!oldMap.ContainsKey(pair.Key))
                 {
-                    Path = addedPath,
-                    BaseSha256 = null,
-                    NewSha256 = newHash,
-                    Delta = fullFileName,
-                    IsAdded = true,
-                    IsRemoved = false
-                });
+                    addedFiles.Add(pair.Key);
+                }
             }
 
-            // --- 削除ファイル登録 ---
+            // --- 削除ファイル ---
             foreach (var oldPath in oldMap.Keys)
             {
                 if (!newMap.ContainsKey(oldPath))
                 {
                     removedFiles.Add(oldPath);
-                    var oldFullPath = oldMap[oldPath];
-                    var oldHash = Hash.Sha256(oldFullPath);
-
-                    fileEntries.Add(new PatchFileEntry
-                    {
-                        Path = oldPath,
-                        BaseSha256 = oldHash,
-                        NewSha256 = null,
-                        Delta = null,
-                        IsAdded = false,
-                        IsRemoved = true
-                    });
                 }
             }
 
-            // --- ZIP作成 ---
-            var zipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
-            var zipPath = Path.Combine(config.OutDir, zipName);
-
-            if (File.Exists(zipPath))
+            // --- 差分ZIP ---
+            var patchZipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
+            var patchZipPath = Path.Combine(config.OutDir, patchZipName);
+            if (File.Exists(patchZipPath))
             {
-                File.Delete(zipPath);
+                File.Delete(patchZipPath);
             }
 
-            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            using (var zip = ZipFile.Open(patchZipPath, ZipArchiveMode.Create))
             {
-                foreach (var entry in fileEntries.Where(x => !x.IsRemoved))
+                foreach (var entry in diffFiles)
                 {
                     var srcPath = Path.Combine(config.OutDir, entry.Delta ?? string.Empty);
                     if (File.Exists(srcPath))
@@ -165,8 +138,44 @@ namespace PatchMaker.Services
                 }
             }
 
-            var zipSize = new FileInfo(zipPath).Length;
-            var zipSha256 = Hash.Sha256(zipPath);
+            var patchZipSize = new FileInfo(patchZipPath).Length;
+            var patchZipSha256 = Hash.Sha256(patchZipPath);
+
+            // --- 追加ZIP ---
+            string addZipName = null;
+            string addZipPath = null;
+            long addZipSize = 0;
+            string addZipSha256 = null;
+            var addEntries = new List<AddFileEntry>();
+
+            if (addedFiles.Count > 0)
+            {
+                addZipName = $"add_v{config.BaseVersion}_to_v{config.Version}.zip";
+                addZipPath = Path.Combine(config.OutDir, addZipName);
+
+                if (File.Exists(addZipPath))
+                {
+                    File.Delete(addZipPath);
+                }
+
+                using (var zip = ZipFile.Open(addZipPath, ZipArchiveMode.Create))
+                {
+                    foreach (var addedPath in addedFiles)
+                    {
+                        var fullPath = newMap[addedPath];
+                        zip.CreateEntryFromFile(fullPath, addedPath.Replace('\\', '/'), CompressionLevel.Fastest);
+
+                        addEntries.Add(new AddFileEntry
+                        {
+                            ZipPath = addedPath.Replace('\\', '/'),
+                            TargetPath = addedPath.Replace('\\', '/')
+                        });
+                    }
+                }
+
+                addZipSize = new FileInfo(addZipPath).Length;
+                addZipSha256 = Hash.Sha256(addZipPath);
+            }
 
             // --- マニフェスト生成 ---
             var manifest = new ManifestZip
@@ -177,13 +186,27 @@ namespace PatchMaker.Services
                 {
                     new PatchArchiveEntry
                     {
-                        ArchiveName = zipName,
-                        Url = "./" + zipName,
-                        Size = zipSize,
-                        Sha256 = zipSha256,
-                        Files = fileEntries
+                        ArchiveName = patchZipName,
+                        Url = "./" + patchZipName,
+                        Size = patchZipSize,
+                        Sha256 = patchZipSha256,
+                        Files = diffFiles
                     }
                 },
+                AddFiles = (addZipName != null)
+                    ? new List<AddArchiveEntry>
+                    {
+                        new AddArchiveEntry
+                        {
+                            ArchiveName = addZipName,
+                            Url = "./" + addZipName,
+                            Size = addZipSize,
+                            Sha256 = addZipSha256 ?? "",
+                            Entries = addEntries
+                        }
+                    }
+                    : new List<AddArchiveEntry>(),
+                RemoveFiles = removedFiles,
                 Mandatory = false
             };
 
@@ -193,18 +216,9 @@ namespace PatchMaker.Services
 
             // --- コンソール出力 ---
             Console.WriteLine("=== 差分作成完了 ===");
-            Console.WriteLine($"変更ファイル数: {fileEntries.Count}");
-
-            if (addedFiles.Count > 0)
-            {
-                Console.WriteLine($"追加ファイル数: {addedFiles.Count}");
-            }
-
-            if (removedFiles.Count > 0)
-            {
-                Console.WriteLine($"削除ファイル数: {removedFiles.Count}");
-            }
-
+            Console.WriteLine($"変更ファイル数: {diffFiles.Count}");
+            Console.WriteLine($"追加ファイル数: {addedFiles.Count}");
+            Console.WriteLine($"削除ファイル数: {removedFiles.Count}");
             Console.WriteLine("出力先: " + Path.GetFullPath(config.OutDir));
             Console.WriteLine("マニフェスト: " + Path.GetFullPath(manifestPath));
 

@@ -81,6 +81,8 @@
   <ItemGroup>
     <Compile Include="Config\ConfigLoader.cs" />
     <Compile Include="Config\MakerConfig.cs" />
+    <Compile Include="Model\AddArchiveEntry.cs" />
+    <Compile Include="Model\AddFileEntry.cs" />
     <Compile Include="Model\Manifest.cs" />
     <Compile Include="Model\ManifestZip.cs" />
     <Compile Include="Model\PatchArchiveEntry.cs" />
