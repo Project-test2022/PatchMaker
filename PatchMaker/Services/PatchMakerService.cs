@@ -118,28 +118,40 @@ namespace PatchMaker.Services
             }
 
             // --- 差分ZIP ---
-            var patchZipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
-            var patchZipPath = Path.Combine(config.OutDir, patchZipName);
-            if (File.Exists(patchZipPath))
-            {
-                File.Delete(patchZipPath);
-            }
+            string patchZipName = null;
+            string patchZipPath = null;
+            long patchZipSize = 0;
+            string patchZipSha256 = null;
 
-            using (var zip = ZipFile.Open(patchZipPath, ZipArchiveMode.Create))
+            if (diffFiles.Count > 0)
             {
-                foreach (var entry in diffFiles)
+                patchZipName = $"patch_v{config.BaseVersion}_to_v{config.Version}.zip";
+                patchZipPath = Path.Combine(config.OutDir, patchZipName);
+                if (File.Exists(patchZipPath))
                 {
-                    var srcPath = Path.Combine(config.OutDir, entry.Delta ?? string.Empty);
-                    if (File.Exists(srcPath))
+                    File.Delete(patchZipPath);
+                }
+
+                using (var zip = ZipFile.Open(patchZipPath, ZipArchiveMode.Create))
+                {
+                    foreach (var entry in diffFiles)
                     {
-                        zip.CreateEntryFromFile(srcPath, entry.Delta, CompressionLevel.Fastest);
-                        File.Delete(srcPath);
+                        var srcPath = Path.Combine(config.OutDir, entry.Delta ?? string.Empty);
+                        if (File.Exists(srcPath))
+                        {
+                            zip.CreateEntryFromFile(srcPath, entry.Delta, CompressionLevel.Fastest);
+                            File.Delete(srcPath);
+                        }
                     }
                 }
-            }
 
-            var patchZipSize = new FileInfo(patchZipPath).Length;
-            var patchZipSha256 = Hash.Sha256(patchZipPath);
+                patchZipSize = new FileInfo(patchZipPath).Length;
+                patchZipSha256 = Hash.Sha256(patchZipPath);
+            }
+            else
+            {
+                Console.WriteLine("差分ファイルが存在しないため、パッチZIPは作成されません。");
+            }
 
             // --- 追加ZIP ---
             string addZipName = null;
